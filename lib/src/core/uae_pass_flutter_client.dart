@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import '../auth/uae_pass_access_token.dart';
+import '../../uaepass_flutter.dart';
 import '../auth/uae_pass_auth_page.dart';
-import '../auth/uae_pass_auth_result.dart';
-import '../auth/uae_pass_login_result.dart';
+import '../auth/uae_pass_logout_page.dart';
 import '../network/uae_pass_api_client.dart';
-import '../profile/uae_pass_profile.dart';
-import 'uae_pass_config.dart';
-import 'uae_pass_exception.dart';
 
 class UaePassFlutter {
   UaePassFlutter({
@@ -76,6 +72,57 @@ class UaePassFlutter {
         error: 'unexpected_error',
         errorDescription: e.toString(),
       );
+    }
+  }
+
+  Future<bool> logout(
+    BuildContext context, {
+    bool clearCookies = true,
+  }) async {
+    try {
+      final logoutUri = Uri.parse(
+        config.environment.logoutEndpoint,
+      ).replace(
+        queryParameters: {
+          'redirect_uri': config.redirectUri,
+        },
+      );
+
+      _log(
+        'Starting UAE PASS logout.',
+      );
+
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute<bool>(
+          fullscreenDialog: true,
+          builder: (_) => UaePassLogoutPage(
+            logoutUrl: logoutUri.toString(),
+            redirectUri: config.redirectUri,
+            clearCookies: clearCookies,
+            onLog: config.onLog,
+          ),
+        ),
+      );
+
+      if (result == true) {
+        _log(
+          'UAE PASS logout successful.',
+        );
+
+        return true;
+      }
+
+      _log(
+        'UAE PASS logout cancelled.',
+      );
+
+      return false;
+    } catch (e) {
+      _log(
+        'UAE PASS logout failed: $e',
+      );
+
+      return false;
     }
   }
 
