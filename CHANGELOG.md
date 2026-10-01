@@ -1,4 +1,4 @@
-## 0.1.0
+## 0.0.1
 
 - Initial UAE PASS mobile authorization-code flow.
 - Staging and production endpoint configuration.
