@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../../uaepass_flutter.dart';
 import '../auth/uae_pass_auth_page.dart';
 import '../auth/uae_pass_logout_page.dart';
+import 'uae_pass_web_session.dart';
 import '../network/uae_pass_api_client.dart';
 
 class UaePassFlutter {
@@ -28,9 +29,33 @@ class UaePassFlutter {
   /// 4. Receive authorization code.
   /// 5. Exchange code for access token.
   /// 6. Retrieve the UAE PASS profile.
-  Future<UaePassLoginResult> login(BuildContext context) async {
+  Future<UaePassLoginResult> login(
+    BuildContext context, {
+    bool clearPreviousSession = true,
+  }) async {
     try {
       config.validateForDirectTokenExchange();
+
+      // =====================================================
+      // IMPORTANT
+      //
+      // Every authentication should start from a known
+      // WebView state.
+      //
+      // This prevents old OAuth sessions/callbacks/cookies
+      // from interfering with the next login.
+      // =====================================================
+
+      if (clearPreviousSession) {
+        await UaePassWebSession.clear(
+          onLog: config.onLog,
+        );
+      }
+
+      _log(
+        'Starting fresh UAE PASS authentication.',
+      );
+
       final authResult = await authorize(context);
 
       if (authResult.isCancelled) {
@@ -43,8 +68,7 @@ class UaePassFlutter {
       if (!authResult.isSuccess || authResult.authorizationCode == null) {
         return UaePassLoginResult.failed(
           error: authResult.error ?? 'authorization_failed',
-          errorDescription:
-              authResult.errorDescription ?? 'UAE PASS authorization failed.',
+          errorDescription: authResult.errorDescription ?? 'UAE PASS authorization failed.',
         );
       }
 
@@ -52,7 +76,9 @@ class UaePassFlutter {
         authResult.authorizationCode!,
       );
 
-      final profile = await getUserProfile(token.accessToken);
+      final profile = await getUserProfile(
+        token.accessToken,
+      );
 
       return UaePassLoginResult.success(
         authorizationCode: authResult.authorizationCode!,
@@ -61,13 +87,19 @@ class UaePassFlutter {
         profile: profile,
       );
     } on UaePassException catch (e) {
-      _log('Login failed: ${e.message}');
+      _log(
+        'Login failed: ${e.message}',
+      );
+
       return UaePassLoginResult.failed(
         error: e.code ?? 'uaepass_error',
         errorDescription: e.message,
       );
     } catch (e) {
-      _log('Unexpected login error: $e');
+      _log(
+        'Unexpected login error: $e',
+      );
+
       return UaePassLoginResult.failed(
         error: 'unexpected_error',
         errorDescription: e.toString(),

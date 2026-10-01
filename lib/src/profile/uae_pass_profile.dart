@@ -31,10 +31,10 @@ class UaePassProfile {
   final String? userType;
   final String? fullnameEN;
   final String? fullnameAR;
-  final String? firstnameEN;
-  final String? firstnameAR;
-  final String? lastnameEN;
-  final String? lastnameAR;
+  String? firstnameEN;
+  String? firstnameAR;
+  String? lastnameEN;
+  String? lastnameAR;
   final String? nationalityEN;
   final String? nationalityAR;
   final String? gender;
@@ -88,23 +88,9 @@ class UaePassProfile {
     );
   }
 
-  String? get displayNameEnglish => fullnameEN?.trim().isNotEmpty == true
-      ? fullnameEN!.trim()
-      : [firstnameEN, lastnameEN]
-          .where((value) => value?.trim().isNotEmpty == true)
-          .map((value) => value!.trim())
-          .join(' ')
-          .trim()
-          .nullIfEmpty;
+  String? get displayNameEnglish => fullnameEN?.trim().isNotEmpty == true ? fullnameEN!.trim() : [firstnameEN, lastnameEN].where((value) => value?.trim().isNotEmpty == true).map((value) => value!.trim()).join(' ').trim().nullIfEmpty;
 
-  String? get displayNameArabic => fullnameAR?.trim().isNotEmpty == true
-      ? fullnameAR!.trim()
-      : [firstnameAR, lastnameAR]
-          .where((value) => value?.trim().isNotEmpty == true)
-          .map((value) => value!.trim())
-          .join(' ')
-          .trim()
-          .nullIfEmpty;
+  String? get displayNameArabic => fullnameAR?.trim().isNotEmpty == true ? fullnameAR!.trim() : [firstnameAR, lastnameAR].where((value) => value?.trim().isNotEmpty == true).map((value) => value!.trim()).join(' ').trim().nullIfEmpty;
 
   static String? _string(dynamic value) {
     final text = value?.toString();
@@ -115,10 +101,7 @@ class UaePassProfile {
   static List<String> _stringList(dynamic value) {
     if (value is! List) return const <String>[];
     return List<String>.unmodifiable(
-      value
-          .map((item) => item?.toString())
-          .whereType<String>()
-          .where((item) => item.isNotEmpty),
+      value.map((item) => item?.toString()).whereType<String>().where((item) => item.isNotEmpty),
     );
   }
 }

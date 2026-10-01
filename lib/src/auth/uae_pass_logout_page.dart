@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../core/uae_pass_web_session.dart';
+
 class UaePassLogoutPage extends StatefulWidget {
   const UaePassLogoutPage({
     super.key,
@@ -37,9 +39,9 @@ class _UaePassLogoutPageState extends State<UaePassLogoutPage> {
   Future<void> _prepareLogout() async {
     try {
       if (widget.clearCookies) {
-        await CookieManager.instance().deleteAllCookies();
+        //await CookieManager.instance().deleteAllCookies();
 
-        await WebStorageManager.instance().deleteAllData();
+        //await WebStorageManager.instance().deleteAllData();
 
         _log(
           'WebView cookies and storage cleared.',
@@ -59,10 +61,7 @@ class _UaePassLogoutPageState extends State<UaePassLogoutPage> {
   bool _isLogoutRedirect(Uri uri) {
     final expected = _redirectUri;
 
-    return uri.scheme.toLowerCase() == expected.scheme.toLowerCase() &&
-        uri.host.toLowerCase() == expected.host.toLowerCase() &&
-        _effectivePort(uri) == _effectivePort(expected) &&
-        _normalizePath(uri.path) == _normalizePath(expected.path);
+    return uri.scheme.toLowerCase() == expected.scheme.toLowerCase() && uri.host.toLowerCase() == expected.host.toLowerCase() && _effectivePort(uri) == _effectivePort(expected) && _normalizePath(uri.path) == _normalizePath(expected.path);
   }
 
   Future<NavigationActionPolicy> _handleNavigation(
@@ -96,7 +95,7 @@ class _UaePassLogoutPageState extends State<UaePassLogoutPage> {
     return NavigationActionPolicy.ALLOW;
   }
 
-  void _completeLogout() {
+  Future<void> _completeLogout() async {
     if (_completed || !mounted) {
       return;
     }
@@ -104,8 +103,20 @@ class _UaePassLogoutPageState extends State<UaePassLogoutPage> {
     _completed = true;
 
     _log(
-      'UAE PASS logout completed.',
+      'UAE PASS server logout completed.',
     );
+
+    // -------------------------------------------------------
+    // NOW clear the local WebView session.
+    // -------------------------------------------------------
+
+    await UaePassWebSession.clear(
+      onLog: widget.onLog,
+    );
+
+    if (!mounted) {
+      return;
+    }
 
     Navigator.of(context).pop(true);
   }
