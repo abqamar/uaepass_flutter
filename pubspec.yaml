@@ -1,0 +1,20 @@
+name: uaepass_flutter
+description: Unofficial reusable Flutter integration for UAE PASS authentication, designed for future digital-signing support.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  app_links: ^6.4.1
+  flutter_inappwebview: ^6.1.5
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
