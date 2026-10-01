@@ -1,0 +1,22 @@
+<!-- Merge these keys inside the consuming application's <dict>. -->
+
+<key>LSApplicationQueriesSchemes</key>
+<array>
+    <string>uaepass</string>
+    <string>uaepassstg</string>
+    <string>mobileid</string>
+</array>
+
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleTypeRole</key>
+        <string>Editor</string>
+        <key>CFBundleURLName</key>
+        <string>com.abqamar.uaepass_flutter</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <string>abqamaruaepass</string>
+        </array>
+    </dict>
+</array>

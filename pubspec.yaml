@@ -1,7 +1,8 @@
 name: uaepass_flutter
 description: Unofficial reusable Flutter integration for UAE PASS authentication, designed for future digital-signing support.
 version: 0.0.1
-homepage: https://github.com/abqamar/uaepass_flutter.git
+homepage: https://github.com/abqamar/uaepass_flutter
+repository: https://github.com/abqamar/uaepass_flutter
 license: MIT
 
 environment:
@@ -13,7 +14,9 @@ dependencies:
     sdk: flutter
   app_links: ^6.4.1
   flutter_inappwebview: ^6.1.5
-  url_launcher: ^6.3.2
+  flutter_device_apps: ^0.8.1
+  http: ^1.2.2
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

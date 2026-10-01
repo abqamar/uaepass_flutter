@@ -1,15 +1,87 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
+import '../auth/uae_pass_access_token.dart';
 import '../auth/uae_pass_auth_page.dart';
 import '../auth/uae_pass_auth_result.dart';
+import '../auth/uae_pass_login_result.dart';
+import '../network/uae_pass_api_client.dart';
+import '../profile/uae_pass_profile.dart';
 import 'uae_pass_config.dart';
+import 'uae_pass_exception.dart';
 
 class UaePassFlutter {
-  const UaePassFlutter({required this.config});
+  UaePassFlutter({
+    required this.config,
+    http.Client? httpClient,
+  }) : _apiClient = UaePassApiClient(
+          config: config,
+          httpClient: httpClient,
+        ) {
+    config.validate();
+  }
 
   final UaePassConfig config;
+  final UaePassApiClient _apiClient;
 
-  Future<UaePassAuthResult> authenticate(BuildContext context) async {
+  /// Full UAE PASS login flow:
+  ///
+  /// 1. Authorize user.
+  /// 2. If UAE PASS app is installed, hand authentication to the app.
+  /// 3. Otherwise remain in the embedded WebView.
+  /// 4. Receive authorization code.
+  /// 5. Exchange code for access token.
+  /// 6. Retrieve the UAE PASS profile.
+  Future<UaePassLoginResult> login(BuildContext context) async {
+    try {
+      config.validateForDirectTokenExchange();
+      final authResult = await authorize(context);
+
+      if (authResult.isCancelled) {
+        return UaePassLoginResult.cancelled(
+          error: authResult.error,
+          errorDescription: authResult.errorDescription,
+        );
+      }
+
+      if (!authResult.isSuccess || authResult.authorizationCode == null) {
+        return UaePassLoginResult.failed(
+          error: authResult.error ?? 'authorization_failed',
+          errorDescription:
+              authResult.errorDescription ?? 'UAE PASS authorization failed.',
+        );
+      }
+
+      final token = await exchangeAuthorizationCode(
+        authResult.authorizationCode!,
+      );
+
+      final profile = await getUserProfile(token.accessToken);
+
+      return UaePassLoginResult.success(
+        authorizationCode: authResult.authorizationCode!,
+        state: authResult.state!,
+        token: token,
+        profile: profile,
+      );
+    } on UaePassException catch (e) {
+      _log('Login failed: ${e.message}');
+      return UaePassLoginResult.failed(
+        error: e.code ?? 'uaepass_error',
+        errorDescription: e.message,
+      );
+    } catch (e) {
+      _log('Unexpected login error: $e');
+      return UaePassLoginResult.failed(
+        error: 'unexpected_error',
+        errorDescription: e.toString(),
+      );
+    }
+  }
+
+  /// Authorization-only flow. Useful if an application later decides to move
+  /// token exchange to its backend without changing the mobile handoff logic.
+  Future<UaePassAuthResult> authorize(BuildContext context) async {
     config.validate();
 
     final result = await Navigator.of(context).push<UaePassAuthResult>(
@@ -20,5 +92,28 @@ class UaePassFlutter {
     );
 
     return result ?? const UaePassAuthResult.cancelled();
+  }
+
+  /// Backward-friendly alias for authorization-only behavior.
+  Future<UaePassAuthResult> authenticate(BuildContext context) {
+    return authorize(context);
+  }
+
+  Future<UaePassAccessToken> exchangeAuthorizationCode(
+    String authorizationCode,
+  ) {
+    return _apiClient.exchangeAuthorizationCode(authorizationCode);
+  }
+
+  Future<UaePassProfile> getUserProfile(String accessToken) {
+    return _apiClient.getUserProfile(accessToken);
+  }
+
+  void dispose() {
+    _apiClient.dispose();
+  }
+
+  void _log(String message) {
+    config.onLog?.call('[uaepass_flutter] $message');
   }
 }

@@ -11,6 +11,18 @@ extension UaePassEnvironmentX on UaePassEnvironment {
           'https://id.uaepass.ae/idshub/authorize',
       };
 
+  String get tokenEndpoint => switch (this) {
+        UaePassEnvironment.staging => 'https://stg-id.uaepass.ae/idshub/token',
+        UaePassEnvironment.production => 'https://id.uaepass.ae/idshub/token',
+      };
+
+  String get userInfoEndpoint => switch (this) {
+        UaePassEnvironment.staging =>
+          'https://stg-id.uaepass.ae/idshub/userinfo',
+        UaePassEnvironment.production =>
+          'https://id.uaepass.ae/idshub/userinfo',
+      };
+
   String get logoutEndpoint => switch (this) {
         UaePassEnvironment.staging => 'https://stg-id.uaepass.ae/idshub/logout',
         UaePassEnvironment.production => 'https://id.uaepass.ae/idshub/logout',

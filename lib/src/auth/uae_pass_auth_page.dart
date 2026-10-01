@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:flutter_device_apps/flutter_device_apps.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/uae_pass_config.dart';
@@ -27,12 +29,15 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
   final AppLinks _appLinks = AppLinks();
 
   StreamSubscription<Uri>? _linkSubscription;
+  Timer? _timeoutTimer;
   InAppWebViewController? _webViewController;
 
   late final String _state;
   Uri? _authorizationUri;
+
   bool _isLoading = true;
   bool _completed = false;
+  bool _useMobileAppFlow = false;
   String? _errorMessage;
 
   UaePassConfig get config => widget.config;
@@ -42,92 +47,163 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
     super.initState();
     _state = _secureState();
     _listenForAppCallbacks();
+    _startTimeout();
     _prepareAuthentication();
   }
 
   @override
   void dispose() {
+    _timeoutTimer?.cancel();
     _linkSubscription?.cancel();
     super.dispose();
+  }
+
+  void _startTimeout() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(config.authenticationTimeout, () {
+      if (_completed || !mounted) return;
+      _finish(
+        const UaePassAuthResult.failed(
+          error: 'authentication_timeout',
+          errorDescription: 'UAE PASS authentication timed out.',
+        ),
+      );
+    });
   }
 
   Future<void> _prepareAuthentication() async {
     try {
       config.validate();
 
-      final installed = await _isUaePassInstalled();
-      _log('UAE PASS installed: $installed');
+      final installed =
+          config.preferUaePassApp ? await _isUaePassInstalled() : false;
 
-      final acr = installed
-          ? 'urn:digitalid:authentication:flow:mobileondevice'
-          : 'urn:safelayer:tws:policies:authentication:level:low';
+      _useMobileAppFlow = installed;
+      _log(
+        installed
+            ? 'UAE PASS app detected. Using on-device app authentication flow.'
+            : 'UAE PASS app not detected. Using embedded WebView authentication flow.',
+      );
 
-      _authorizationUri = Uri.parse(
-        config.environment.authorizationEndpoint,
-      ).replace(
-        queryParameters: <String, String>{
-          'response_type': 'code',
-          'client_id': config.clientId,
-          'scope': config.scope,
-          'state': _state,
-          'redirect_uri': config.redirectUri,
-          'acr_values': acr,
-          'ui_locales': config.locale,
-        },
+      _authorizationUri = _buildAuthorizationUri(
+        useMobileAppFlow: _useMobileAppFlow,
       );
 
       _log('Authorization URL prepared.');
 
-      if (mounted) {
-        setState(() {});
-      }
+      if (mounted) setState(() {});
     } catch (e) {
       _fail('Unable to prepare UAE PASS authentication.', e);
     }
   }
 
+  Uri _buildAuthorizationUri({required bool useMobileAppFlow}) {
+    final acr = useMobileAppFlow
+        ? 'urn:digitalid:authentication:flow:mobileondevice'
+        : 'urn:safelayer:tws:policies:authentication:level:low';
+
+    return Uri.parse(config.environment.authorizationEndpoint).replace(
+      queryParameters: <String, String>{
+        'response_type': 'code',
+        'client_id': config.clientId,
+        'scope': config.scope,
+        'state': _state,
+        'redirect_uri': config.redirectUri,
+        'acr_values': acr,
+        'ui_locales': config.locale,
+      },
+    );
+  }
+
   Future<bool> _isUaePassInstalled() async {
-    final scheme = config.environment.mobileAppScheme;
-    return canLaunchUrl(Uri.parse('$scheme://'));
+    final resolver = config.appInstalledResolver;
+    if (resolver != null) {
+      return resolver(config.environment);
+    }
+
+    // UAE PASS documentation recommends checking the Android package ID. We
+    // do that first on Android rather than relying only on a URL-scheme probe.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final app = await FlutterDeviceApps.getApp(
+          config.environment.androidPackageName,
+          includeIcon: false,
+        );
+        if (app != null) return true;
+      } catch (e) {
+        _log('Android package check failed; trying URL schemes. $e');
+      }
+    }
+
+    // iOS uses scheme discovery, and Android also gets this as a safe fallback.
+    // The consuming Android app must expose schemes/packages through <queries>;
+    // iOS must list schemes in LSApplicationQueriesSchemes.
+    final candidates = <Uri>[
+      Uri.parse('${config.environment.mobileAppScheme}://'),
+      Uri.parse('mobileid://'),
+    ];
+
+    for (final candidate in candidates) {
+      try {
+        if (await canLaunchUrl(candidate)) return true;
+      } catch (_) {
+        // Try the next candidate. Missing platform visibility configuration
+        // should result in the safe embedded-WebView fallback.
+      }
+    }
+
+    return false;
   }
 
   void _listenForAppCallbacks() {
     _linkSubscription = _appLinks.uriLinkStream.listen(
-      (uri) async {
-        _log('App callback received: ${uri.scheme}://${uri.host}${uri.path}');
-
-        if (uri.scheme.toLowerCase() != config.appScheme.toLowerCase()) {
-          return;
-        }
-
-        final isResume = uri.host == config.resumeHost ||
-            uri.path == '/${config.resumeHost}';
-
-        if (!isResume) {
-          return;
-        }
-
-        final originalUrl = uri.queryParameters['url'];
-        if (originalUrl == null || originalUrl.isEmpty) {
-          _fail('UAE PASS callback did not contain the resume URL.');
-          return;
-        }
-
-        final originalUri = Uri.tryParse(originalUrl);
-        if (originalUri == null) {
-          _fail('UAE PASS returned an invalid resume URL.');
-          return;
-        }
-
-        _log('Resuming authentication inside the same WebView.');
-
-        await _webViewController?.loadUrl(
-          urlRequest: URLRequest(url: WebUri(originalUri.toString())),
-        );
-      },
+      (uri) => _processAppCallback(uri),
       onError: (Object error) {
-        _fail('Deep-link listener failed.', error);
+        _log('Deep-link listener error: $error');
       },
+    );
+  }
+
+  Future<void> _processAppCallback(Uri uri) async {
+    if (_completed) return;
+
+    if (uri.scheme.toLowerCase() != config.appScheme.toLowerCase()) {
+      return;
+    }
+
+    _log('App callback received: ${uri.scheme}://${uri.host}${uri.path}');
+
+    final isResume =
+        uri.host.toLowerCase() == config.resumeHost.toLowerCase() ||
+            uri.path.toLowerCase() == '/${config.resumeHost.toLowerCase()}';
+
+    if (!isResume) return;
+
+    final originalUrl = uri.queryParameters['url'];
+    if (originalUrl == null || originalUrl.isEmpty) {
+      _fail('UAE PASS callback did not contain the resume URL.');
+      return;
+    }
+
+    final originalUri = Uri.tryParse(originalUrl);
+    if (originalUri == null || !originalUri.hasScheme) {
+      _fail('UAE PASS returned an invalid resume URL.');
+      return;
+    }
+
+    _log('Resuming UAE PASS authorization in the existing WebView.');
+
+    final controller = _webViewController;
+    if (controller == null) {
+      // WebView normally remains alive while UAE PASS is foregrounded. If the
+      // page was recreated, retain the callback as the next URL to open.
+      _authorizationUri = originalUri;
+      if (mounted) setState(() {});
+      return;
+    }
+
+    await controller.loadUrl(
+      urlRequest: URLRequest(url: WebUri(originalUri.toString())),
     );
   }
 
@@ -135,43 +211,64 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
     NavigationAction action,
   ) async {
     final webUri = action.request.url;
-    if (webUri == null) {
-      return NavigationActionPolicy.ALLOW;
-    }
+    if (webUri == null) return NavigationActionPolicy.ALLOW;
 
     final uri = Uri.tryParse(webUri.toString());
-    if (uri == null) {
-      return NavigationActionPolicy.ALLOW;
-    }
+    if (uri == null) return NavigationActionPolicy.ALLOW;
 
-    _log('WebView navigation: ${uri.scheme}://${uri.host}${uri.path}');
+    final handled = await _handleObservedUri(uri);
+    return handled
+        ? NavigationActionPolicy.CANCEL
+        : NavigationActionPolicy.ALLOW;
+  }
+
+  Future<bool> _handleObservedUri(Uri uri) async {
+    if (_completed) return true;
+
+    _logNavigation(uri);
 
     if (_isRedirectUri(uri)) {
       _completeFromRedirect(uri);
-      return NavigationActionPolicy.CANCEL;
+      return true;
     }
 
     if (_isUaePassMobileUri(uri)) {
+      if (!_useMobileAppFlow) {
+        // Browser fallback should not normally produce the mobile deep link,
+        // but allow it if it does rather than leaving the WebView on an
+        // unsupported custom scheme.
+        _log('UAE PASS mobile link received while in WebView fallback.');
+      }
+
       await _openUaePassApp(uri);
-      return NavigationActionPolicy.CANCEL;
+      return true;
     }
 
-    return NavigationActionPolicy.ALLOW;
+    return false;
+  }
+
+  void _logNavigation(Uri uri) {
+    // Do not log query parameters because they can contain callback data or
+    // authorization codes. Only log the route shape.
+    _log('WebView navigation: ${uri.scheme}://${uri.host}${uri.path}');
   }
 
   bool _isRedirectUri(Uri uri) {
-    final redirect = Uri.parse(config.redirectUri);
+    final redirect = config.redirectUriParsed;
 
     return uri.scheme.toLowerCase() == redirect.scheme.toLowerCase() &&
         uri.host.toLowerCase() == redirect.host.toLowerCase() &&
+        _effectivePort(uri) == _effectivePort(redirect) &&
         _normalizePath(uri.path) == _normalizePath(redirect.path);
+  }
+
+  int _effectivePort(Uri uri) {
+    if (uri.hasPort) return uri.port;
+    return uri.scheme.toLowerCase() == 'https' ? 443 : 80;
   }
 
   bool _isUaePassMobileUri(Uri uri) {
     final scheme = uri.scheme.toLowerCase();
-
-    // UAE PASS documentation has used mobileid:// in the generic protocol
-    // description and uaepass:// / uaepassstg:// in environment examples.
     return scheme == 'mobileid' ||
         scheme == 'uaepass' ||
         scheme == 'uaepassstg';
@@ -179,12 +276,13 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
 
   Future<void> _openUaePassApp(Uri originalUri) async {
     try {
-      final successUrl = originalUri.queryParameters['successURL'];
-      final failureUrl = originalUri.queryParameters['failureURL'];
+      final successUrl = _queryValueIgnoreCase(originalUri, 'successURL');
+      final failureUrl = _queryValueIgnoreCase(originalUri, 'failureURL');
 
       if (successUrl == null || failureUrl == null) {
         throw const UaePassException(
           'UAE PASS mobile URL is missing successURL or failureURL.',
+          code: 'missing_mobile_callback',
         );
       }
 
@@ -200,13 +298,21 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
         queryParameters: <String, String>{'url': failureUrl},
       );
 
-      final parameters = Map<String, String>.from(originalUri.queryParameters)
-        ..['successURL'] = successCallback.toString()
-        ..['failureURL'] = failureCallback.toString();
+      final parameters = Map<String, String>.from(originalUri.queryParameters);
+      _replaceQueryValueIgnoreCase(
+        parameters,
+        key: 'successURL',
+        value: successCallback.toString(),
+      );
+      _replaceQueryValueIgnoreCase(
+        parameters,
+        key: 'failureURL',
+        value: failureCallback.toString(),
+      );
 
       final modifiedUri = originalUri.replace(queryParameters: parameters);
 
-      _log('Launching UAE PASS mobile application.');
+      _log('Opening the UAE PASS mobile application.');
 
       final launched = await launchUrl(
         modifiedUri,
@@ -214,11 +320,65 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
       );
 
       if (!launched) {
-        throw const UaePassException('Could not launch UAE PASS application.');
+        throw const UaePassException(
+          'The UAE PASS application could not be opened.',
+          code: 'uaepass_launch_failed',
+        );
       }
+
+      _log('UAE PASS mobile application opened. Waiting for callback.');
     } catch (e) {
-      _fail('Unable to launch UAE PASS application.', e);
+      _log('Unable to open UAE PASS application: $e');
+
+      // If app detection was a false positive or the OS refused the custom
+      // URI, transparently continue with UAE PASS's app-not-installed flow.
+      await _fallbackToBrowserFlow();
     }
+  }
+
+  Future<void> _fallbackToBrowserFlow() async {
+    if (_completed) return;
+
+    _useMobileAppFlow = false;
+    final browserUri = _buildAuthorizationUri(useMobileAppFlow: false);
+    _authorizationUri = browserUri;
+
+    _log('Falling back to UAE PASS authentication in the embedded WebView.');
+
+    final controller = _webViewController;
+    if (controller != null) {
+      await controller.loadUrl(
+        urlRequest: URLRequest(url: WebUri(browserUri.toString())),
+      );
+    } else if (mounted) {
+      setState(() {});
+    }
+  }
+
+  String? _queryValueIgnoreCase(Uri uri, String key) {
+    final expected = key.toLowerCase();
+    for (final entry in uri.queryParameters.entries) {
+      if (entry.key.toLowerCase() == expected) return entry.value;
+    }
+    return null;
+  }
+
+  void _replaceQueryValueIgnoreCase(
+    Map<String, String> parameters, {
+    required String key,
+    required String value,
+  }) {
+    final expected = key.toLowerCase();
+    String? existingKey;
+
+    for (final candidate in parameters.keys) {
+      if (candidate.toLowerCase() == expected) {
+        existingKey = candidate;
+        break;
+      }
+    }
+
+    parameters[existingKey ?? key] = value;
   }
 
   void _completeFromRedirect(Uri uri) {
@@ -230,8 +390,9 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
     final description = uri.queryParameters['error_description'];
 
     if (error != null) {
-      final cancelled = error.toLowerCase().contains('cancel') ||
-          error.toLowerCase() == 'access_denied';
+      final normalized = error.toLowerCase();
+      final cancelled =
+          normalized.contains('cancel') || normalized == 'access_denied';
 
       _finish(
         cancelled
@@ -247,7 +408,7 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
       return;
     }
 
-    if (returnedState != _state) {
+    if (returnedState == null || returnedState != _state) {
       _finish(
         const UaePassAuthResult.failed(
           error: 'invalid_state',
@@ -267,10 +428,12 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
       return;
     }
 
+    _log('Authorization code received successfully.');
+
     _finish(
       UaePassAuthResult.success(
         authorizationCode: code,
-        state: returnedState!,
+        state: returnedState,
       ),
     );
   }
@@ -278,6 +441,7 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
   void _finish(UaePassAuthResult result) {
     if (_completed || !mounted) return;
     _completed = true;
+    _timeoutTimer?.cancel();
     Navigator.of(context).pop(result);
   }
 
@@ -318,6 +482,14 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
       body: _errorMessage != null
           ? _ErrorView(
               message: _errorMessage!,
+              onRetry: () {
+                setState(() {
+                  _errorMessage = null;
+                  _isLoading = true;
+                });
+                _startTimeout();
+                _prepareAuthentication();
+              },
               onClose: () => _finish(
                 UaePassAuthResult.failed(
                   error: 'authentication_error',
@@ -337,6 +509,7 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
                         javaScriptEnabled: true,
                         useShouldOverrideUrlLoading: true,
                         mediaPlaybackRequiresUserGesture: true,
+                        supportMultipleWindows: false,
                       ),
                       onWebViewCreated: (controller) {
                         _webViewController = controller;
@@ -344,19 +517,31 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
                       shouldOverrideUrlLoading: (controller, action) {
                         return _handleNavigation(action);
                       },
-                      onLoadStart: (_, __) {
-                        if (mounted) {
-                          setState(() => _isLoading = true);
+                      onLoadStart: (_, webUri) async {
+                        if (mounted) setState(() => _isLoading = true);
+                        if (webUri != null) {
+                          final uri = Uri.tryParse(webUri.toString());
+                          if (uri != null && _isRedirectUri(uri)) {
+                            _completeFromRedirect(uri);
+                          }
+                        }
+                      },
+                      onUpdateVisitedHistory: (_, webUri, __) {
+                        if (webUri == null) return;
+                        final uri = Uri.tryParse(webUri.toString());
+                        if (uri != null && _isRedirectUri(uri)) {
+                          _completeFromRedirect(uri);
                         }
                       },
                       onLoadStop: (_, __) {
-                        if (mounted) {
-                          setState(() => _isLoading = false);
-                        }
+                        if (mounted) setState(() => _isLoading = false);
                       },
                       onReceivedError: (_, request, error) {
+                        // Custom-scheme handoff can appear as a WebView error on
+                        // some OS/WebView versions. Do not turn it into a user
+                        // error; the navigation delegate performs the handoff.
                         _log(
-                          'WebView error for ${request.url}: ${error.description}',
+                          'WebView notice for ${request.url}: ${error.description}',
                         );
                       },
                     ),
@@ -370,16 +555,18 @@ class _UaePassAuthPageState extends State<UaePassAuthPage> {
 class _ErrorView extends StatelessWidget {
   const _ErrorView({
     required this.message,
+    required this.onRetry,
     required this.onClose,
   });
 
   final String message;
+  final VoidCallback onRetry;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -389,6 +576,11 @@ class _ErrorView extends StatelessWidget {
             Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 20),
             FilledButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
               onPressed: onClose,
               child: const Text('Close'),
             ),

@@ -2,12 +2,12 @@ import 'dart:typed_data';
 
 import 'uae_pass_signing_models.dart';
 
-/// Abstraction for future UAE PASS signing support.
+/// Extension point reserved for a future UAE PASS digital-signing module.
 ///
-/// Recommended implementation: the consuming application's backend talks to
-/// UAE PASS signing APIs, while this Flutter package handles the mobile UX.
-/// This avoids placing signing/client secrets in the APK/IPA.
-abstract interface class UaePassSigningBackend {
+/// Version 0.0.1 intentionally does not implement signing API calls. Keeping
+/// this interface separate from authentication allows single-document and
+/// multi-document signing to be added later without breaking the login API.
+abstract interface class UaePassSigningService {
   Future<UaePassSigningSession> createSigningSession(
     UaePassSigningRequest request,
   );

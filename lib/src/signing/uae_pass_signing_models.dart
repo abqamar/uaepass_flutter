@@ -1,10 +1,6 @@
 import 'dart:typed_data';
 
-/// Public models reserved for the document-signing module.
-///
-/// UAE PASS requires authentication before document signing. The package keeps
-/// signing behind a backend abstraction so client secrets and signing
-/// credentials do not need to be embedded in a mobile application.
+/// Request model reserved for future UAE PASS document-signing support.
 class UaePassSigningRequest {
   const UaePassSigningRequest({
     required this.documentBytes,
@@ -15,6 +11,7 @@ class UaePassSigningRequest {
     this.width = 400,
     this.height = 150,
     this.locale = 'en_US',
+    this.metadata = const <String, dynamic>{},
   });
 
   final Uint8List documentBytes;
@@ -25,6 +22,7 @@ class UaePassSigningRequest {
   final double width;
   final double height;
   final String locale;
+  final Map<String, dynamic> metadata;
 }
 
 class UaePassSigningSession {
